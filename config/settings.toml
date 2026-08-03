@@ -1,0 +1,32 @@
+[youtube]
+api_base = "https://www.googleapis.com/youtube/v3"
+region_code = "KR"
+
+[trending]
+runs_per_day = 3
+categories = [10, 17, 20, 22, 23, 24, 25, 26]
+max_pages_per_category = 1
+
+[shorts]
+max_duration_sec = 180
+
+[quota]
+daily_cap = 10000
+unit_cost_videos_list = 1
+unit_cost_playlist_items_list = 1
+unit_cost_channels_list = 1
+trending_reserved = 200
+channel_incremental_reserved = 3000
+
+[channels.backfill]
+max_videos_per_channel = 500
+batch_size = 50
+
+[channels.incremental]
+growth_window_days = 7
+new_video_max_pages = 5
+safe_buffer_days = 2
+
+[storage]
+db_path = "data/media.db"
+raw_dir = "data/raw"

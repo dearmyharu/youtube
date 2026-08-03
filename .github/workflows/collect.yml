@@ -1,0 +1,69 @@
+name: collect
+
+on:
+  schedule:
+    # KST 09:00 / 15:00 / 21:00 = UTC 00:00 / 06:00 / 12:00 (docs/trending-collector-spec.md #2)
+    - cron: "0 0,6,12 * * *"
+    # once daily, offset from the trending runs (docs/collect-channels-spec.md #3, #4)
+    - cron: "30 3 * * *"
+  workflow_dispatch:
+    inputs:
+      channel_mode:
+        description: "collect_channels mode (manual dispatch only)"
+        type: choice
+        options: [backfill, incremental, both]
+        default: both
+
+jobs:
+  trending:
+    if: github.event.schedule == '0 0,6,12 * * *' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: collect-trending
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      # NOTE: interim persistence — see docs/trending-collector-spec.md #9 (storage decision pending).
+      # Restores the most recent cached data/ dir and always saves under a new key so runs accumulate.
+      - uses: actions/cache@v4
+        with:
+          path: data
+          key: media-insight-data-${{ github.run_id }}
+          restore-keys: |
+            media-insight-data-
+      - run: python -m src.collect_trending
+        env:
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+
+  channels:
+    if: github.event.schedule == '30 3 * * *' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: collect-channels
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - uses: actions/cache@v4
+        with:
+          path: data
+          key: media-insight-data-${{ github.run_id }}
+          restore-keys: |
+            media-insight-data-
+      - if: github.event_name != 'workflow_dispatch' || github.event.inputs.channel_mode != 'incremental'
+        run: python -m src.collect_channels --mode backfill
+        env:
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+      - if: github.event_name != 'workflow_dispatch' || github.event.inputs.channel_mode != 'backfill'
+        run: python -m src.collect_channels --mode incremental
+        env:
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
