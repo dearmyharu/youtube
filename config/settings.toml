@@ -28,5 +28,5 @@ new_video_max_pages = 5
 safe_buffer_days = 2
 
 [storage]
-db_path = "data/media.db"
+# database is Postgres (Supabase), configured via the DATABASE_URL env var — see .env.example
 raw_dir = "data/raw"

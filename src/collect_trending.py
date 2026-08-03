@@ -124,9 +124,13 @@ def main() -> int:
     if not api_key:
         log.error("YOUTUBE_API_KEY is not set")
         return 1
+    database_url = os.environ.get("DATABASE_URL")
+    if not database_url:
+        log.error("DATABASE_URL is not set")
+        return 1
 
     settings = load_settings()
-    conn = db.get_connection(str(ROOT / settings["storage"]["db_path"]))
+    conn = db.get_connection(database_url)
     db.init_db(conn)
 
     run_id = uuid.uuid4().hex

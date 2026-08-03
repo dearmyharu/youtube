@@ -28,17 +28,19 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements.txt
-      # NOTE: interim persistence — see docs/trending-collector-spec.md #9 (storage decision pending).
-      # Restores the most recent cached data/ dir and always saves under a new key so runs accumulate.
-      - uses: actions/cache@v4
-        with:
-          path: data
-          key: media-insight-data-${{ github.run_id }}
-          restore-keys: |
-            media-insight-data-
       - run: python -m src.collect_trending
         env:
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      # DB writes go straight to Supabase Postgres; only the raw API archive is runner-local,
+      # so it's uploaded here (source-of-truth retention, docs/trending-collector-spec.md #0.1).
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trending-raw-${{ github.run_id }}
+          path: data/raw/trending
+          retention-days: 90
+          if-no-files-found: ignore
 
   channels:
     if: github.event.schedule == '30 3 * * *' || github.event_name == 'workflow_dispatch'
@@ -53,17 +55,20 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements.txt
-      - uses: actions/cache@v4
-        with:
-          path: data
-          key: media-insight-data-${{ github.run_id }}
-          restore-keys: |
-            media-insight-data-
       - if: github.event_name != 'workflow_dispatch' || github.event.inputs.channel_mode != 'incremental'
         run: python -m src.collect_channels --mode backfill
         env:
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
       - if: github.event_name != 'workflow_dispatch' || github.event.inputs.channel_mode != 'backfill'
         run: python -m src.collect_channels --mode incremental
         env:
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: channel-raw-${{ github.run_id }}
+          path: data/raw/channel
+          retention-days: 90
+          if-no-files-found: ignore

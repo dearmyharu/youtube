@@ -1,15 +1,29 @@
-import sqlite3
+import os
 
 import pytest
 
 from src import db
 
+TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL") or os.environ.get("DATABASE_URL")
+
+pytestmark = pytest.mark.skipif(
+    not TEST_DATABASE_URL,
+    reason="set TEST_DATABASE_URL (or DATABASE_URL) to run db.py tests against a real Postgres instance",
+)
+
+_TABLES = [
+    "video_meta_history", "video_stats", "trending_rank",
+    "channel_stats", "channel_collection_state", "channel_pool", "videos", "runs",
+]
+
 
 @pytest.fixture
 def conn():
-    c = sqlite3.connect(":memory:")
-    c.row_factory = sqlite3.Row
+    c = db.get_connection(TEST_DATABASE_URL)
     db.init_db(c)
+    for table in _TABLES:
+        c.execute(f"TRUNCATE TABLE {table} CASCADE")
+    c.commit()
     yield c
     c.close()
 
@@ -214,25 +228,26 @@ class TestChannelStatsAppendOnly:
 
 
 class TestGrowthWindowVideoIds:
-    def test_boundary_at_exactly_window_days(self, conn):
+    def test_near_boundary_still_included(self, conn):
+        # just inside the 7-day window — a wide-enough margin (~1 minute) that clock
+        # drift between this UPDATE and the query's own NOW() can't flip the result
         db.upsert_video(conn, make_video(video_id="old"))
-        # manually set published_at to control the boundary precisely
         conn.execute(
-            "UPDATE videos SET published_at = datetime('now', '-7 days') WHERE video_id='old'"
+            "UPDATE videos SET published_at = (NOW() - INTERVAL '6 days 23 hours 59 minutes')::text WHERE video_id='old'"
         )
         db.upsert_video(conn, make_video(video_id="new"))
         conn.execute(
-            "UPDATE videos SET published_at = datetime('now', '-1 days') WHERE video_id='new'"
+            "UPDATE videos SET published_at = (NOW() - INTERVAL '1 day')::text WHERE video_id='new'"
         )
 
         ids = db.get_growth_window_video_ids(conn, ["c1"], 7)
         assert "new" in ids
-        assert "old" in ids  # exactly 7 days ago is still within the window (>=)
+        assert "old" in ids
 
     def test_outside_window_excluded(self, conn):
         db.upsert_video(conn, make_video(video_id="ancient"))
         conn.execute(
-            "UPDATE videos SET published_at = datetime('now', '-30 days') WHERE video_id='ancient'"
+            "UPDATE videos SET published_at = (NOW() - INTERVAL '30 days')::text WHERE video_id='ancient'"
         )
         ids = db.get_growth_window_video_ids(conn, ["c1"], 7)
         assert "ancient" not in ids
