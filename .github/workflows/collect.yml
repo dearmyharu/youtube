@@ -4,8 +4,11 @@ on:
   schedule:
     # KST 09:00 / 15:00 / 21:00 = UTC 00:00 / 06:00 / 12:00 (docs/trending-collector-spec.md #2)
     - cron: "0 0,6,12 * * *"
-    # once daily, offset from the trending runs (docs/collect-channels-spec.md #3, #4)
-    - cron: "30 3 * * *"
+    # backfill runs 4x/day (settings.toml channels.backfill.runs_per_day), offset from trending
+    # so ~500 channels/day of history gets spread across the day instead of one giant batch
+    - cron: "0 2,8,14,20 * * *"
+    # incremental (new-video detection + 7-day growth window) once daily
+    - cron: "30 21 * * *"
   workflow_dispatch:
     inputs:
       channel_mode:
@@ -42,8 +45,35 @@ jobs:
           retention-days: 90
           if-no-files-found: ignore
 
-  channels:
-    if: github.event.schedule == '30 3 * * *' || github.event_name == 'workflow_dispatch'
+  channel-backfill:
+    if: github.event.schedule == '0 2,8,14,20 * * *' || (github.event_name == 'workflow_dispatch' && github.event.inputs.channel_mode != 'incremental')
+    runs-on: ubuntu-latest
+    # same concurrency group as incremental: they both touch channel_collection_state and
+    # share the day's quota budget (db.get_quota_used_today), so they must never overlap
+    concurrency:
+      group: collect-channels
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python -m src.collect_channels --mode backfill
+        env:
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: channel-backfill-raw-${{ github.run_id }}
+          path: data/raw/channel
+          retention-days: 90
+          if-no-files-found: ignore
+
+  channel-incremental:
+    if: github.event.schedule == '30 21 * * *' || (github.event_name == 'workflow_dispatch' && github.event.inputs.channel_mode != 'backfill')
     runs-on: ubuntu-latest
     concurrency:
       group: collect-channels
@@ -55,20 +85,14 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements.txt
-      - if: github.event_name != 'workflow_dispatch' || github.event.inputs.channel_mode != 'incremental'
-        run: python -m src.collect_channels --mode backfill
-        env:
-          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-      - if: github.event_name != 'workflow_dispatch' || github.event.inputs.channel_mode != 'backfill'
-        run: python -m src.collect_channels --mode incremental
+      - run: python -m src.collect_channels --mode incremental
         env:
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: channel-raw-${{ github.run_id }}
+          name: channel-incremental-raw-${{ github.run_id }}
           path: data/raw/channel
           retention-days: 90
           if-no-files-found: ignore

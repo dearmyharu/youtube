@@ -21,6 +21,9 @@ channel_incremental_reserved = 3000
 [channels.backfill]
 max_videos_per_channel = 500
 batch_size = 50
+# spread ~500 channels/day of backfill across several runs instead of one giant batch
+daily_channel_target = 500
+runs_per_day = 4
 
 [channels.incremental]
 growth_window_days = 7

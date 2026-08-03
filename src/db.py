@@ -173,6 +173,17 @@ def finish_run(
     conn.commit()
 
 
+def get_quota_used_today(conn: Connection, day: str) -> int:
+    """Sum of quota_used across all jobs (trending + channel backfill/incremental) whose
+    started_at falls on `day` (YYYY-MM-DD, UTC). Lets multiple same-day runs (e.g. several
+    backfill batches spread across the day) see what earlier runs already spent."""
+    row = conn.execute(
+        "SELECT COALESCE(SUM(quota_used), 0) AS used FROM runs WHERE started_at::date = %s",
+        (day,),
+    ).fetchone()
+    return row["used"] or 0
+
+
 # --- videos / stats -----------------------------------------------------
 
 def upsert_video(conn: Connection, video: dict) -> None:

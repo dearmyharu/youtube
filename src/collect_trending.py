@@ -104,7 +104,10 @@ def _collect_chart(client: YouTubeClient, conn, settings: dict, category_id, run
                 "screened_at": None,
                 "passed_filter": None,
                 "group_type": None,
-                "decision": "pending",
+                # auto-approved into the panel so the daily backfill/incremental jobs pick it
+                # up without manual review; ON CONFLICT DO NOTHING means a later manual
+                # decision (e.g. exclude, or promoting to tier='core') is never overwritten
+                "decision": "include",
                 "decision_reason": None,
             })
         items_seen += len(items)

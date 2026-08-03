@@ -13,6 +13,10 @@ YouTube 콘텐츠 데이터를 기반으로 채널 전략을 분석하고 성과
 5. `videos`/`video_stats`/`video_meta_history`/`runs` 테이블은 트렌딩 수집기와 채널 수집기가 공유한다.
 6. 백필과 증분은 별도 실행 모드(`--mode backfill|incremental`)이며, 진행 상태는
    `channel_collection_state`에 남겨 재실행 시 이어받는다.
+7. 채널은 트렌딩에서 발견되는 즉시 `decision='include'`로 자동 승인된다(수동 검수 없음).
+   하루 500채널 백필 목표를 감당하기 위한 결정이며, `tier`(core/panel 우선순위)와 수동
+   `exclude`는 여전히 유효하다. 백필은 하루 4번(`runs_per_day`) 나눠 실행되고, 각 실행은
+   `db.get_quota_used_today`로 오늘 이미 쓴 쿼터를 조회해서 서로 겹치지 않게 예산을 나눈다.
 
 DB는 SQLite가 아니라 **Supabase Postgres**다 (`DATABASE_URL`). GitHub Actions 시크릿에
 `YOUTUBE_API_KEY`, `DATABASE_URL` 둘 다 등록되어 있고, 워크플로도 이걸 그대로 사용한다.

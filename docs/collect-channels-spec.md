@@ -10,6 +10,14 @@
 6. **백필과 증분은 서로 다른 실행 모드다.** 한 스크립트에서 `--mode backfill` / `--mode incremental`로
    분기하되, 상태(어디까지 긁었는지)는 반드시 DB(`channel_collection_state`)에 남겨서 재실행 시
    이어받을 수 있게 한다.
+7. **채널 승인은 자동이다.** 처음엔 사람이 `channel_pool.decision`을 수동으로 `include`로 확정하는
+   설계였지만, 규모(하루 500개 백필)를 감당하려고 트렌딩에서 발견되는 즉시 `decision='include'`로
+   자동 승인하도록 바꿨다. `tier`(core/panel) 우선순위와 수동 제외(`exclude`)는 여전히 유효 —
+   `ON CONFLICT DO NOTHING`이라 이미 있는 채널의 수동 결정은 덮어쓰지 않는다.
+8. **하루 여러 번 도는 백필은 서로의 쿼터 소비를 알아야 한다.** `runs` 테이블에서 오늘 날짜의
+   `quota_used` 합계(`db.get_quota_used_today`)를 매 실행마다 조회해서 "오늘 이미 쓴 양"을 뺀
+   나머지로 예산을 계산한다. 이게 없으면 하루 4번 도는 백필이 각자 "오늘 예산 전부 남았다"고
+   착각해서 4배 초과 소진한다.
 
 ---
 
@@ -20,7 +28,9 @@
 | 채널당 백필 개수 | 최근 500개 (또는 재생목록 끝, 먼저 도달하는 쪽) |
 | 성장곡선 추적 기간 | 업로드 후 7일간 매일 |
 | 채널 풀 규모 | core(비교 분석 핵심 채널, 소수) + panel(최대 1,000~2,000개) |
+| 채널 승인 | 트렌딩 발견 즉시 자동 `include` (수동 검수 없음) |
 | 백필 우선순위 | `channel_pool.tier`: `core`를 무조건 먼저 전부 처리, 남는 쿼터로 `panel`을 FIFO(`first_seen_at`) |
+| 일일 백필 목표 | 하루 500채널, `runs_per_day=4`로 나눠 실행(회당 ≈125채널 상한) |
 
 ---
 
@@ -55,9 +65,12 @@
 - 완료 시 `channel_collection_state`에 `backfill_status='done'`, `backfill_completed_at`,
   `oldest_video_published_at` 기록
 - 실패한 채널은 `backfill_status='failed'`로 남기고 다음 실행에서 재시도 대상에 포함(전체 배치 중단 금지)
-- **일일 쿼터 예산 스케줄러:** 하루 쿼터를 ① 트렌딩 수집기 예약분 → ② 이미 백필 끝난 채널의 증분 추적
-  예약분 → ③ 남는 쿼터로 backfill 대상 채널 처리, 순서로 배분(`quota.allocate_daily_budget`).
-  1,000~2,000개 채널이면 며칠에 걸쳐 자연히 소화됩니다.
+- **일일 쿼터 예산 스케줄러:** `db.get_quota_used_today`로 오늘 이미 쓴 쿼터(트렌딩 + 이전 백필/증분
+  실행분 전부 포함)를 실제로 조회한 뒤, 트렌딩·증분 예약분을 뺀 나머지로 오늘 처리 가능한 채널 수를
+  계산한다(`quota.backfill_slots_today`). 여기에 `daily_channel_target / runs_per_day`(기본
+  500/4 ≈ 125)로 회당 상한을 한 번 더 씌워서, 하루 4번(`.github/workflows/collect.yml`) 도는
+  실행이 하루치 목표를 골고루 나눠 처리하도록 한다. 1,000~2,000개 채널이면 며칠에 걸쳐 자연히
+  소화된다.
 
 ---
 

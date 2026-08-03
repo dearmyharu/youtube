@@ -128,8 +128,9 @@ def _backfill_channel(client: YouTubeClient, conn, channel: dict, uploads_playli
 
     oldest_published_at = None
     if video_ids:
+        placeholders = ",".join("%s" for _ in video_ids)
         row = conn.execute(
-            "SELECT MIN(published_at) AS m FROM videos WHERE video_id IN (%s)" % ",".join("?" for _ in video_ids),
+            f"SELECT MIN(published_at) AS m FROM videos WHERE video_id IN ({placeholders})",
             video_ids,
         ).fetchone()
         oldest_published_at = row["m"] if row else None
@@ -149,23 +150,36 @@ def run_backfill(client: YouTubeClient, conn, settings: dict, run_id: str, colle
         log.info("backfill queue is empty")
         return 0
 
-    remaining_budget = quota.allocate_daily_budget(
-        settings["quota"]["daily_cap"],
-        settings["quota"]["trending_reserved"],
-        settings["quota"]["channel_incremental_reserved"],
-    )
+    # cross-run accounting: several backfill batches run per day (settings.channels.backfill.runs_per_day),
+    # so each one must see what earlier runs already spent today rather than assuming a full budget.
+    today = collected_at[:10]
+    used_today = db.get_quota_used_today(conn, today)
+    reserved = settings["quota"]["trending_reserved"] + settings["quota"]["channel_incremental_reserved"]
+    remaining_budget = max(settings["quota"]["daily_cap"] - used_today - reserved, 0)
+
     per_channel_pages = -(-settings["channels"]["backfill"]["max_videos_per_channel"]
                            // settings["channels"]["backfill"]["batch_size"])
-    slots = quota.backfill_slots_today(
+    quota_slots = quota.backfill_slots_today(
         remaining_budget, per_channel_pages,
         settings["quota"]["unit_cost_playlist_items_list"],
         settings["quota"]["unit_cost_videos_list"],
     )
+
+    # spread the daily target evenly across the day's runs instead of one run draining the budget
+    daily_target = settings["channels"]["backfill"]["daily_channel_target"]
+    runs_per_day = settings["channels"]["backfill"]["runs_per_day"]
+    per_run_cap = -(-daily_target // runs_per_day)
+    slots = min(quota_slots, per_run_cap)
+
     todays_batch = queue[:slots]
     if not todays_batch:
-        log.info("no quota budget left for backfill today (queue has %d channels waiting)", len(queue))
+        log.info(
+            "no backfill slots this run (quota_slots=%d, per_run_cap=%d, queue=%d channels waiting)",
+            quota_slots, per_run_cap, len(queue),
+        )
         return 0
-    log.info("backfilling %d/%d queued channels today", len(todays_batch), len(queue))
+    log.info("backfilling %d/%d queued channels this run (used_today=%d before this run)",
+              len(todays_batch), len(queue), used_today)
 
     channel_ids = [c["channel_id"] for c in todays_batch]
     uploads_by_channel = _fetch_channel_snapshot(
@@ -211,7 +225,7 @@ def _detect_new_videos(client: YouTubeClient, conn, channel: dict, uploads_playl
         if not page_ids:
             break
 
-        placeholders = ",".join("?" for _ in page_ids)
+        placeholders = ",".join("%s" for _ in page_ids)
         known = {r["video_id"] for r in conn.execute(
             f"SELECT video_id FROM videos WHERE video_id IN ({placeholders})", page_ids
         ).fetchall()}
