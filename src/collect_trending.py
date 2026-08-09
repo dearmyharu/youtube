@@ -96,6 +96,7 @@ def _collect_chart(client: YouTubeClient, conn, settings: dict, category_id, run
                 "rank": rank,
                 "video_id": video_row["video_id"],
             })
+            is_excluded_category = video_row["category_id"] in settings["trending"]["exclude_channel_categories"]
             db.upsert_channel_pool(conn, {
                 "channel_id": video_row["channel_id"],
                 "channel_title": item.get("snippet", {}).get("channelTitle"),
@@ -105,10 +106,10 @@ def _collect_chart(client: YouTubeClient, conn, settings: dict, category_id, run
                 "passed_filter": None,
                 "group_type": None,
                 # auto-approved into the panel so the daily backfill/incremental jobs pick it
-                # up without manual review; ON CONFLICT DO NOTHING means a later manual
-                # decision (e.g. exclude, or promoting to tier='core') is never overwritten
-                "decision": "include",
-                "decision_reason": None,
+                # up without manual review (except excluded categories, e.g. News & Politics);
+                # ON CONFLICT DO NOTHING means a later manual decision is never overwritten
+                "decision": "exclude" if is_excluded_category else "include",
+                "decision_reason": "news category (25)" if is_excluded_category else None,
             })
         items_seen += len(items)
         conn.commit()

@@ -90,6 +90,16 @@ class YouTubeClient:
             params["pageToken"] = page_token
         return self._get("playlistItems", params, unit_cost=unit_cost)
 
+    def search_list(self, q: str, region_code: str = None, order: str = "relevance",
+                     video_type: str = "video", max_results: int = 50,
+                     page_token: str = None, unit_cost: int = 100) -> dict:
+        params = {"part": "snippet", "q": q, "type": video_type, "order": order, "maxResults": max_results}
+        if region_code:
+            params["regionCode"] = region_code
+        if page_token:
+            params["pageToken"] = page_token
+        return self._get("search", params, unit_cost=unit_cost)
+
 
 def chunked(items, size: int = BATCH_SIZE):
     items = list(items)

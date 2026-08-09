@@ -47,9 +47,9 @@ CREATE TABLE IF NOT EXISTS video_stats (
   video_id      TEXT NOT NULL,
   collected_at  TEXT NOT NULL,
   run_id        TEXT NOT NULL,
-  view_count    INTEGER,
-  like_count    INTEGER,
-  comment_count INTEGER,
+  view_count    BIGINT,
+  like_count    BIGINT,
+  comment_count BIGINT,
   PRIMARY KEY (video_id, collected_at)
 );
 
@@ -80,8 +80,8 @@ CREATE TABLE IF NOT EXISTS channel_stats (
   channel_id       TEXT NOT NULL,
   collected_at     TEXT NOT NULL,
   run_id           TEXT NOT NULL,
-  subscriber_count INTEGER,
-  view_count       INTEGER,
+  subscriber_count BIGINT,
+  view_count       BIGINT,
   video_count      INTEGER,
   PRIMARY KEY (channel_id, collected_at)
 );
