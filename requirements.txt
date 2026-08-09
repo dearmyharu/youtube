@@ -2,4 +2,6 @@ requests>=2.31
 python-dotenv>=1.0
 tomli>=2.0; python_version < "3.11"
 psycopg2-binary>=2.9
+pandas>=2.2
+soynlp>=0.0.493
 pytest>=8.0
