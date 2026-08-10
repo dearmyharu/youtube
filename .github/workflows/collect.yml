@@ -11,6 +11,9 @@ on:
     - cron: "0 2,8,14,20 * * *"
     # incremental (new-video detection + 7-day growth window) once daily
     - cron: "30 21 * * *"
+    # dashboard aggregates: well after incremental's worst-case 4h window (21:30 + 4h = 01:30)
+    # so it reflects that day's freshest data
+    - cron: "30 3 * * *"
   workflow_dispatch:
     inputs:
       channel_mode:
@@ -111,3 +114,24 @@ jobs:
           path: data/raw/channel
           retention-days: 90
           if-no-files-found: ignore
+
+  build-dashboard-aggregates:
+    if: github.event.schedule == '30 3 * * *' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    # read-only against videos/channel_pool, writes only the two aggregate tables —
+    # doesn't touch channel_collection_state or the quota budget, so it doesn't need
+    # to share the collect-channels concurrency group, only guard against itself
+    timeout-minutes: 60
+    concurrency:
+      group: build-dashboard-aggregates
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python -m src.build_dashboard_aggregates
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
