@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS videos (
   category_id    TEXT,
   tags           TEXT,
   thumbnail_url  TEXT,
+  thumbnail_path TEXT,          -- set once we've mirrored the thumbnail into Supabase Storage
   first_seen_at  TEXT NOT NULL,
   last_meta_at   TEXT
 );
@@ -186,8 +187,15 @@ def get_quota_used_today(conn: Connection, day: str) -> int:
 
 # --- videos / stats -----------------------------------------------------
 
-def upsert_video(conn: Connection, video: dict) -> None:
-    conn.execute(
+def upsert_video(conn: Connection, video: dict) -> bool:
+    """Returns True if this was a brand-new video (not previously in `videos`).
+
+    Uses the `xmax = 0` idiom: a row's xmax is unset (0) only if this statement's
+    INSERT branch created it; ON CONFLICT DO UPDATE always sets a non-zero xmax.
+    Callers use this to decide whether to fetch+store the thumbnail (only for
+    videos genuinely new to us, not every backfill/incremental re-upsert).
+    """
+    row = conn.execute(
         """INSERT INTO videos
              (video_id, channel_id, title, published_at, duration_sec, category_id,
               tags, thumbnail_url, first_seen_at, last_meta_at)
@@ -203,9 +211,15 @@ def upsert_video(conn: Connection, video: dict) -> None:
              tags=excluded.tags,
              thumbnail_url=excluded.thumbnail_url,
              last_meta_at=excluded.last_meta_at
+           RETURNING (xmax = 0) AS inserted
         """,
         video,
-    )
+    ).fetchone()
+    return bool(row["inserted"])
+
+
+def set_thumbnail_path(conn: Connection, video_id: str, thumbnail_path: str) -> None:
+    conn.execute("UPDATE videos SET thumbnail_path=%s WHERE video_id=%s", (thumbnail_path, video_id))
 
 
 def record_meta_history_if_changed(conn: Connection, video_id: str, observed_at: str,

@@ -21,7 +21,10 @@ except ModuleNotFoundError:  # Python < 3.11
 
 from dotenv import load_dotenv
 
+import requests
+
 from src import db, parsers, quota
+from src.storage_client import StorageError, SupabaseStorageClient, save_thumbnail
 from src.youtube_client import QuotaExceededError, YouTubeAPIError, YouTubeClient, chunked, save_raw_response
 
 log = logging.getLogger("collect_channels")
@@ -31,6 +34,29 @@ ROOT = Path(__file__).resolve().parent.parent
 def load_settings() -> dict:
     with open(ROOT / "config" / "settings.toml", "rb") as f:
         return tomllib.load(f)
+
+
+def build_storage_client() -> SupabaseStorageClient:
+    """Thumbnails are optional: if SUPABASE_URL/SUPABASE_SERVICE_KEY aren't set, callers
+    just skip thumbnail mirroring rather than failing the whole collection run."""
+    project_url = os.environ.get("SUPABASE_URL")
+    service_key = os.environ.get("SUPABASE_SERVICE_KEY")
+    if not project_url or not service_key:
+        log.warning("SUPABASE_URL/SUPABASE_SERVICE_KEY not set — skipping thumbnail mirroring")
+        return None
+    storage = SupabaseStorageClient(project_url, service_key)
+    storage.ensure_bucket()
+    return storage
+
+
+def _maybe_save_thumbnail(storage, conn, video_id: str, thumbnail_url: str, is_new: bool) -> None:
+    if not is_new or storage is None or not thumbnail_url:
+        return
+    try:
+        path = save_thumbnail(storage, video_id, thumbnail_url)
+        db.set_thumbnail_path(conn, video_id, path)
+    except (requests.RequestException, StorageError) as exc:
+        log.warning("thumbnail save failed for %s: %s", video_id, exc)
 
 
 def _extract_video_row(item: dict, first_seen_at: str) -> dict:
@@ -51,7 +77,12 @@ def _extract_video_row(item: dict, first_seen_at: str) -> dict:
 
 
 def _fetch_videos_batch(client: YouTubeClient, conn, video_ids: list, run_id: str,
-                         collected_at: str, unit_cost: int, raw_dir: Path, label: str) -> None:
+                         collected_at: str, unit_cost: int, raw_dir: Path, label: str,
+                         storage=None, save_thumbnails: bool = False) -> None:
+    """save_thumbnails must stay False for backfill: almost every backfilled video is
+    "new to our DB" on first encounter, and downloading thumbnails for hundreds of
+    thousands of historical videos is exactly the cost the user opted out of — only
+    the incremental (genuinely newly-published) path passes save_thumbnails=True."""
     for i, batch in enumerate(chunked(video_ids)):
         if not batch:
             continue
@@ -59,7 +90,9 @@ def _fetch_videos_batch(client: YouTubeClient, conn, video_ids: list, run_id: st
         save_raw_response(resp, raw_dir / f"{run_id}_{label}_videos_{i}.json.gz")
         for item in resp.get("items", []):
             video_row = _extract_video_row(item, collected_at)
-            db.upsert_video(conn, video_row)
+            is_new = db.upsert_video(conn, video_row)
+            if save_thumbnails:
+                _maybe_save_thumbnail(storage, conn, video_row["video_id"], video_row["thumbnail_url"], is_new)
             db.record_meta_history_if_changed(
                 conn, video_row["video_id"], collected_at, video_row["title"], video_row["thumbnail_url"]
             )
@@ -252,7 +285,8 @@ def _detect_new_videos(client: YouTubeClient, conn, channel: dict, uploads_playl
     return new_video_ids
 
 
-def run_incremental(client: YouTubeClient, conn, settings: dict, run_id: str, collected_at: str, raw_dir: Path) -> int:
+def run_incremental(client: YouTubeClient, conn, settings: dict, run_id: str, collected_at: str,
+                     raw_dir: Path, storage=None) -> int:
     channels = db.get_included_channels(conn)
     if not channels:
         log.info("no included channels for incremental collection")
@@ -285,7 +319,8 @@ def run_incremental(client: YouTubeClient, conn, settings: dict, run_id: str, co
     all_video_ids.update(growth_ids)
 
     _fetch_videos_batch(client, conn, list(all_video_ids), run_id, collected_at,
-                         settings["quota"]["unit_cost_videos_list"], raw_dir, "incremental")
+                         settings["quota"]["unit_cost_videos_list"], raw_dir, "incremental",
+                         storage=storage, save_thumbnails=True)
 
     return len(all_video_ids)
 
@@ -326,7 +361,8 @@ def main() -> int:
         if args.mode == "backfill":
             items_seen = run_backfill(client, conn, settings, run_id, collected_at, raw_dir)
         else:
-            items_seen = run_incremental(client, conn, settings, run_id, collected_at, raw_dir)
+            storage = build_storage_client()
+            items_seen = run_incremental(client, conn, settings, run_id, collected_at, raw_dir, storage)
     except QuotaExceededError as exc:
         status = "failed"
         error_message = str(exc)

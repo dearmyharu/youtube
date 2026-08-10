@@ -82,6 +82,16 @@ class TestVideoUpsertIdempotency:
         assert row["first_seen_at"] == "2026-01-01T00:00:00+00:00"
         assert row["title"] == "Updated"
 
+    def test_upsert_reports_insert_vs_update(self, conn):
+        assert db.upsert_video(conn, make_video()) is True
+        assert db.upsert_video(conn, make_video(title="changed")) is False
+
+    def test_set_thumbnail_path(self, conn):
+        db.upsert_video(conn, make_video())
+        db.set_thumbnail_path(conn, "v1", "thumbnails/v1.jpg")
+        row = conn.execute("SELECT thumbnail_path FROM videos WHERE video_id='v1'").fetchone()
+        assert row["thumbnail_path"] == "thumbnails/v1.jpg"
+
     def test_rerun_same_run_produces_no_duplicate_stats(self, conn):
         stats = {
             "video_id": "v1", "collected_at": "2026-01-01T00:00:00+00:00", "run_id": "run1",

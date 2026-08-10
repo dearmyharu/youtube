@@ -19,7 +19,10 @@ except ModuleNotFoundError:  # Python < 3.11
 
 from dotenv import load_dotenv
 
+import requests
+
 from src import db, parsers
+from src.storage_client import StorageError, SupabaseStorageClient, save_thumbnail
 from src.youtube_client import QuotaExceededError, YouTubeAPIError, YouTubeClient, save_raw_response
 
 log = logging.getLogger("collect_trending")
@@ -29,6 +32,29 @@ ROOT = Path(__file__).resolve().parent.parent
 def load_settings() -> dict:
     with open(ROOT / "config" / "settings.toml", "rb") as f:
         return tomllib.load(f)
+
+
+def build_storage_client() -> SupabaseStorageClient:
+    """Thumbnails are optional: if SUPABASE_URL/SUPABASE_SERVICE_KEY aren't set, callers
+    just skip thumbnail mirroring rather than failing the whole collection run."""
+    project_url = os.environ.get("SUPABASE_URL")
+    service_key = os.environ.get("SUPABASE_SERVICE_KEY")
+    if not project_url or not service_key:
+        log.warning("SUPABASE_URL/SUPABASE_SERVICE_KEY not set — skipping thumbnail mirroring")
+        return None
+    storage = SupabaseStorageClient(project_url, service_key)
+    storage.ensure_bucket()
+    return storage
+
+
+def _maybe_save_thumbnail(storage, conn, video_id: str, thumbnail_url: str, is_new: bool) -> None:
+    if not is_new or storage is None or not thumbnail_url:
+        return
+    try:
+        path = save_thumbnail(storage, video_id, thumbnail_url)
+        db.set_thumbnail_path(conn, video_id, path)
+    except (requests.RequestException, StorageError) as exc:
+        log.warning("thumbnail save failed for %s: %s", video_id, exc)
 
 
 def _extract_video_row(item: dict, first_seen_at: str) -> dict:
@@ -49,7 +75,7 @@ def _extract_video_row(item: dict, first_seen_at: str) -> dict:
 
 
 def _collect_chart(client: YouTubeClient, conn, settings: dict, category_id, run_id: str,
-                    collected_at: str, raw_dir: Path) -> int:
+                    collected_at: str, raw_dir: Path, storage=None) -> int:
     """Collect one chart (category_id=None means the overall 'all' chart). Returns items seen."""
     region_code = settings["youtube"]["region_code"]
     max_pages = settings["trending"]["max_pages_per_category"]
@@ -75,7 +101,8 @@ def _collect_chart(client: YouTubeClient, conn, settings: dict, category_id, run
         items = resp.get("items", [])
         for rank, item in enumerate(items, start=1):
             video_row = _extract_video_row(item, collected_at)
-            db.upsert_video(conn, video_row)
+            is_new = db.upsert_video(conn, video_row)
+            _maybe_save_thumbnail(storage, conn, video_row["video_id"], video_row["thumbnail_url"], is_new)
             db.record_meta_history_if_changed(
                 conn, video_row["video_id"], collected_at, video_row["title"], video_row["thumbnail_url"]
             )
@@ -142,6 +169,7 @@ def main() -> int:
     db.start_run(conn, run_id, "trending", collected_at)
 
     client = YouTubeClient(api_key)
+    storage = build_storage_client()
     raw_dir = ROOT / settings["storage"]["raw_dir"] / "trending" / collected_at[:4] / collected_at[5:7] / collected_at[8:10]
 
     categories = settings["trending"]["categories"]
@@ -151,10 +179,10 @@ def main() -> int:
     error_message = None
 
     try:
-        total_items += _collect_chart(client, conn, settings, None, run_id, collected_at, raw_dir)
+        total_items += _collect_chart(client, conn, settings, None, run_id, collected_at, raw_dir, storage)
         for category_id in categories:
             try:
-                total_items += _collect_chart(client, conn, settings, category_id, run_id, collected_at, raw_dir)
+                total_items += _collect_chart(client, conn, settings, category_id, run_id, collected_at, raw_dir, storage)
             except YouTubeAPIError as exc:
                 failed_categories.append(category_id)
                 log.warning("category %s failed: %s", category_id, exc)

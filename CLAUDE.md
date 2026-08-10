@@ -23,6 +23,14 @@ DB는 SQLite가 아니라 **Supabase Postgres**다 (`DATABASE_URL`). GitHub Acti
 원본 API 응답(`data/raw/`)은 러너 로컬이라 워크플로에서 매 실행마다 아티팩트로 업로드한다
 (DB에는 파생 데이터만 들어감).
 
+썸네일 이미지는 **새로 발견되는 영상만** Supabase Storage(`thumbnails` 버킷)에 미러링한다
+(`SUPABASE_URL`/`SUPABASE_SERVICE_KEY`, 둘 다 없으면 조용히 건너뜀). 기존 20만+ 영상은
+소급 다운로드하지 않기로 결정했음 — 계속 늘어나는 데이터셋 전체를 받으면 용량이 너무 큼.
+`db.upsert_video`가 반환하는 insert 여부(`xmax=0` 트릭)로 판단하고, **백필 경로는 절대
+`save_thumbnails=True`로 호출하지 않는다** (`collect_channels.py`의
+`_fetch_videos_batch`/`_maybe_save_thumbnail` 참고) — 백필은 대부분 "우리 DB엔 새것"이라
+이 게이트가 없으면 채널 백필마다 수십만 장을 또 받게 된다.
+
 ## 실행
 
 ```bash
