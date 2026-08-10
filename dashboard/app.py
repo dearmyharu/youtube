@@ -28,6 +28,7 @@ load_dotenv(ROOT / ".env")
 
 from src import db
 from src.analysis.keywords import detect_trend
+from src.storage_client import SupabaseStorageClient
 from dashboard import queries
 
 st.set_page_config(page_title="media-insight", page_icon="📺", layout="wide")
@@ -46,6 +47,12 @@ def database_url() -> str:
     if "DATABASE_URL" in st.secrets:
         return st.secrets["DATABASE_URL"]
     return os.environ["DATABASE_URL"]
+
+
+def thumbnail_public_url(thumbnail_path: str) -> str:
+    # public_url() is a pure string join, no auth needed, so a dummy service key is fine here
+    project_url = st.secrets["SUPABASE_URL"] if "SUPABASE_URL" in st.secrets else os.environ["SUPABASE_URL"]
+    return SupabaseStorageClient(project_url, "unused").public_url(thumbnail_path)
 
 
 @st.cache_data(ttl=600)
@@ -89,6 +96,15 @@ def load_channel_leaderboard(limit: int) -> pd.DataFrame:
     conn = db.get_connection(database_url())
     try:
         return queries.get_channel_leaderboard(conn, limit=limit)
+    finally:
+        conn.close()
+
+
+@st.cache_data(ttl=600)
+def load_recent_thumbnails(limit: int) -> pd.DataFrame:
+    conn = db.get_connection(database_url())
+    try:
+        return queries.get_recent_thumbnails(conn, limit=limit)
     finally:
         conn.close()
 
@@ -185,7 +201,7 @@ st.divider()
 # ============================================================ Layer 2: Diagnosis
 
 st.header("2. 진단")
-tab_a, tab_b, tab_channels = st.tabs(["소재 (A)", "형식 (B)", "채널 비교"])
+tab_a, tab_b, tab_channels, tab_thumbs = st.tabs(["소재 (A)", "형식 (B)", "채널 비교", "썸네일"])
 
 with tab_a:
     if not kw_freq:
@@ -313,6 +329,25 @@ with tab_channels:
             }),
             use_container_width=True, hide_index=True,
         )
+
+with tab_thumbs:
+    st.caption(
+        "새로 발견되는 영상만 썸네일을 저장합니다(기존 대량 백로그는 소급 저장하지 않음) — "
+        "매일 조금씩 늘어납니다. 발견 순 최신 정렬."
+    )
+    n_thumbs = st.slider("표시할 개수", 10, 120, 60, key="n_thumbs")
+    thumbs = load_recent_thumbnails(limit=n_thumbs)
+    if thumbs.empty:
+        st.info("아직 저장된 썸네일이 없습니다.")
+    else:
+        cols = st.columns(5)
+        for i, row in thumbs.iterrows():
+            with cols[i % 5]:
+                st.image(thumbnail_public_url(row["thumbnail_path"]), use_container_width=True)
+                title = row["title"] or ""
+                short_title = title[:40] + ("…" if len(title) > 40 else "")
+                view_line = f"조회수 {int(row['view_count']):,}" if pd.notna(row["view_count"]) else "조회수 미집계"
+                st.caption(f"**{row['channel_title']}**  \n{short_title}  \n{view_line}")
 
 st.divider()
 st.caption(

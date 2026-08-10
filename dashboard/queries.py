@@ -68,6 +68,24 @@ def get_monthly_keyword_trend_dict(conn, months: int = 6) -> dict:
     return out
 
 
+def get_recent_thumbnails(conn, limit: int = 60) -> pd.DataFrame:
+    """Videos with a mirrored thumbnail (new-discoveries only, see CLAUDE.md), newest first."""
+    rows = conn.execute("""
+        SELECT v.video_id, v.title, v.published_at, v.thumbnail_path, cp.channel_title,
+               lvs.view_count
+        FROM videos v
+        JOIN channel_pool cp ON cp.channel_id = v.channel_id
+        LEFT JOIN LATERAL (
+            SELECT view_count FROM video_stats vs
+            WHERE vs.video_id = v.video_id ORDER BY collected_at DESC LIMIT 1
+        ) lvs ON true
+        WHERE v.thumbnail_path IS NOT NULL
+        ORDER BY v.first_seen_at DESC
+        LIMIT %s
+    """, (limit,)).fetchall()
+    return pd.DataFrame([dict(r) for r in rows])
+
+
 def get_channel_leaderboard(conn, limit: int = 30) -> pd.DataFrame:
     """Median view count per channel (from each video's latest observation), subscriber
     count (from the channel's latest snapshot), and upload cadence over the last 90 days."""
