@@ -1,19 +1,20 @@
 name: collect
 
 on:
-  # RESUMED 2026-08-09: channel curation done for this batch — news channels excluded,
-  # 795 creator channels seeded via search.list bootstrap (src/discover_channels.py).
-  schedule:
-    # KST 09:00 / 15:00 / 21:00 = UTC 00:00 / 06:00 / 12:00 (docs/trending-collector-spec.md #2)
-    - cron: "0 0,6,12 * * *"
-    # backfill runs 4x/day (settings.toml channels.backfill.runs_per_day), offset from trending
-    # so ~500 channels/day of history gets spread across the day instead of one giant batch
-    - cron: "0 2,8,14,20 * * *"
-    # incremental (new-video detection + 7-day growth window) once daily
-    - cron: "30 21 * * *"
-    # dashboard aggregates: well after incremental's worst-case 4h window (21:30 + 4h = 01:30)
-    # so it reflects that day's freshest data
-    - cron: "30 3 * * *"
+  # PAUSED 2026-08-10 (user request). Schedule triggers commented out rather than
+  # deleted so re-enabling is a one-line revert; workflow_dispatch (manual runs)
+  # still works. See docs/system-guide.md for context on this project's pause history.
+  # schedule:
+  #   # KST 09:00 / 15:00 / 21:00 = UTC 00:00 / 06:00 / 12:00 (docs/trending-collector-spec.md #2)
+  #   - cron: "0 0,6,12 * * *"
+  #   # backfill runs 4x/day (settings.toml channels.backfill.runs_per_day), offset from trending
+  #   # so ~500 channels/day of history gets spread across the day instead of one giant batch
+  #   - cron: "0 2,8,14,20 * * *"
+  #   # incremental (new-video detection + 7-day growth window) once daily
+  #   - cron: "30 21 * * *"
+  #   # dashboard aggregates: well after incremental's worst-case 4h window (21:30 + 4h = 01:30)
+  #   # so it reflects that day's freshest data
+  #   - cron: "30 3 * * *"
   workflow_dispatch:
     inputs:
       channel_mode:
