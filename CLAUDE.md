@@ -42,6 +42,20 @@ python -m src.collect_channels --mode backfill
 python -m src.collect_channels --mode incremental
 ```
 
+## 대시보드
+
+`dashboard/app.py`(Streamlit)는 원본 테이블을 직접 긁지 않고 `monthly_keyword_trend`/
+`monthly_format_trend` 집계 테이블만 조회한다(`dashboard/queries.py`). 새 데이터를
+반영하려면 먼저 집계를 갱신해야 한다:
+
+```bash
+python -m src.build_dashboard_aggregates   # soynlp 재학습 포함, 수 분 소요
+streamlit run dashboard/app.py             # 로컬 확인
+```
+
+배포는 Streamlit Community Cloud, `DATABASE_URL`은 커밋하지 말고 앱의 Secrets에
+`st.secrets`로 등록. 3층(편성 제안)은 트렌드 베이스라인이 더 쌓일 때까지 의도적으로 뺌.
+
 ## 테스트
 
 ```bash

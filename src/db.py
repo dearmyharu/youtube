@@ -95,6 +95,31 @@ CREATE TABLE IF NOT EXISTS channel_collection_state (
   last_incremental_at         TEXT
 );
 
+-- Dashboard aggregates (src/build_dashboard_aggregates.py). Unlike the observation
+-- tables above, these are DERIVED and safe to overwrite — each batch run replaces a
+-- month's row wholesale so the dashboard only ever does a cheap SELECT, never
+-- re-runs soynlp tokenization or a full table scan on page load.
+CREATE TABLE IF NOT EXISTS monthly_keyword_trend (
+  year_month  TEXT NOT NULL,
+  keyword     TEXT NOT NULL,
+  video_count INTEGER NOT NULL,
+  computed_at TEXT NOT NULL,
+  PRIMARY KEY (year_month, keyword)
+);
+
+CREATE TABLE IF NOT EXISTS monthly_format_trend (
+  year_month                 TEXT PRIMARY KEY,
+  video_count                INTEGER,
+  shorts_count                INTEGER,
+  shorts_ratio                 REAL,
+  avg_duration_longform_sec    REAL,
+  avg_duration_shorts_sec      REAL,
+  series_notation_ratio        REAL,
+  upload_hour_histogram        TEXT,  -- JSON: {"0": n, "1": n, ...}
+  upload_weekday_histogram     TEXT,  -- JSON: {"0": n, ...} (0=Monday)
+  computed_at                  TEXT NOT NULL
+);
+
 CREATE OR REPLACE VIEW channel_trending_days AS
 SELECT v.channel_id,
        COUNT(DISTINCT substr(t.collected_at, 1, 10)) AS days_in_trending,
@@ -373,3 +398,41 @@ def get_growth_window_video_ids(conn: Connection, channel_ids: list, window_days
         (*channel_ids, window_days),
     ).fetchall()
     return [r["video_id"] for r in rows]
+
+
+# --- dashboard aggregates (derived, safe to overwrite) --------------------
+
+def replace_monthly_keyword_trend(conn: Connection, year_month: str, keyword_counts: dict, computed_at: str) -> None:
+    """Wholesale replace: a batch run's keyword set for a month fully supersedes the last one."""
+    conn.execute("DELETE FROM monthly_keyword_trend WHERE year_month=%s", (year_month,))
+    for keyword, count in keyword_counts.items():
+        conn.execute(
+            """INSERT INTO monthly_keyword_trend (year_month, keyword, video_count, computed_at)
+               VALUES (%s, %s, %s, %s)""",
+            (year_month, keyword, count, computed_at),
+        )
+
+
+def upsert_monthly_format_trend(conn: Connection, row: dict) -> None:
+    conn.execute(
+        """INSERT INTO monthly_format_trend
+             (year_month, video_count, shorts_count, shorts_ratio, avg_duration_longform_sec,
+              avg_duration_shorts_sec, series_notation_ratio, upload_hour_histogram,
+              upload_weekday_histogram, computed_at)
+           VALUES
+             (%(year_month)s, %(video_count)s, %(shorts_count)s, %(shorts_ratio)s, %(avg_duration_longform_sec)s,
+              %(avg_duration_shorts_sec)s, %(series_notation_ratio)s, %(upload_hour_histogram)s,
+              %(upload_weekday_histogram)s, %(computed_at)s)
+           ON CONFLICT (year_month) DO UPDATE SET
+             video_count=excluded.video_count,
+             shorts_count=excluded.shorts_count,
+             shorts_ratio=excluded.shorts_ratio,
+             avg_duration_longform_sec=excluded.avg_duration_longform_sec,
+             avg_duration_shorts_sec=excluded.avg_duration_shorts_sec,
+             series_notation_ratio=excluded.series_notation_ratio,
+             upload_hour_histogram=excluded.upload_hour_histogram,
+             upload_weekday_histogram=excluded.upload_weekday_histogram,
+             computed_at=excluded.computed_at
+        """,
+        row,
+    )

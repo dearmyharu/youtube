@@ -4,4 +4,6 @@ tomli>=2.0; python_version < "3.11"
 psycopg2-binary>=2.9
 pandas>=2.2
 soynlp>=0.0.493
+streamlit>=1.38
+altair>=5.3
 pytest>=8.0
