@@ -178,6 +178,7 @@ def main() -> int:
     status = "success"
     error_message = None
 
+    unexpected_exc = None
     try:
         total_items += _collect_chart(client, conn, settings, None, run_id, collected_at, raw_dir, storage)
         for category_id in categories:
@@ -190,16 +191,29 @@ def main() -> int:
         status = "failed"
         error_message = str(exc)
         log.error("quota exceeded, aborting run: %s", exc)
+    except Exception as exc:  # noqa: BLE001 - a run must never end up stuck at status='running'
+        status = "failed"
+        error_message = f"{type(exc).__name__}: {exc}"
+        log.exception("unexpected error, aborting run")
+        unexpected_exc = exc
     else:
         if failed_categories:
             status = "partial"
             error_message = f"failed categories: {failed_categories}"
 
-    db.finish_run(conn, run_id, parsers.now_utc_iso(), status, client.quota_used, total_items, error_message)
-    conn.close()
+    try:
+        db.finish_run(conn, run_id, parsers.now_utc_iso(), status, client.quota_used, total_items, error_message)
+    except Exception:
+        log.exception("failed to record run outcome (connection likely broken)")
+    try:
+        conn.close()
+    except Exception:
+        pass
 
     log.info("run %s finished: status=%s items_seen=%d quota_used=%d", run_id, status, total_items, client.quota_used)
 
+    if unexpected_exc is not None:
+        raise unexpected_exc
     if total_items == 0:
         log.error("collected 0 items — treating as failure")
         return 1

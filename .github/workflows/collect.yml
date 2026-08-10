@@ -23,6 +23,7 @@ jobs:
   trending:
     if: github.event.schedule == '0 0,6,12 * * *' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     concurrency:
       group: collect-trending
       cancel-in-progress: false
@@ -52,6 +53,10 @@ jobs:
   channel-backfill:
     if: github.event.schedule == '0 2,8,14,20 * * *' || (github.event_name == 'workflow_dispatch' && github.event.inputs.channel_mode != 'incremental')
     runs-on: ubuntu-latest
+    # generous margin over the ~40min a 125-channel batch normally takes — without this,
+    # a hung run blocks the shared concurrency group (and everything queued behind it) for
+    # up to GitHub's default 6h job cap instead of failing fast (see docs/system-guide.md)
+    timeout-minutes: 90
     # same concurrency group as incremental: they both touch channel_collection_state and
     # share the day's quota budget (db.get_quota_used_today), so they must never overlap
     concurrency:
@@ -79,6 +84,10 @@ jobs:
   channel-incremental:
     if: github.event.schedule == '30 21 * * *' || (github.event_name == 'workflow_dispatch' && github.event.inputs.channel_mode != 'backfill')
     runs-on: ubuntu-latest
+    # incremental touches every included channel (1 non-batchable API call each), so this
+    # legitimately grows with the channel count — already ~3h at ~1400 channels. Revisit this
+    # ceiling (or split the job) if it keeps climbing; see docs/system-guide.md.
+    timeout-minutes: 240
     concurrency:
       group: collect-channels
       cancel-in-progress: false

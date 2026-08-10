@@ -157,7 +157,17 @@ def _strip_unsupported_query_params(database_url: str) -> str:
 
 
 def get_connection(database_url: str) -> Connection:
-    return Connection(psycopg2.connect(_strip_unsupported_query_params(database_url)))
+    """connect_timeout bounds the initial TCP/auth handshake; statement_timeout (a
+    session-level GUC, set via `options`) bounds every query after that. Without
+    these, a silently-dropped connection to the Supabase pooler blocks forever on
+    a socket read with no exception ever raised — this is exactly what produced
+    several `runs` rows stuck at status='running' for 6+ hours until GitHub Actions'
+    own job timeout killed the process from outside."""
+    return Connection(psycopg2.connect(
+        _strip_unsupported_query_params(database_url),
+        connect_timeout=10,
+        options="-c statement_timeout=30000",
+    ))
 
 
 def init_db(conn: Connection) -> None:
