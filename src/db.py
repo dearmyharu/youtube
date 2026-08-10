@@ -103,6 +103,24 @@ SELECT v.channel_id,
 FROM trending_rank t
 JOIN videos v ON v.video_id = t.video_id
 GROUP BY v.channel_id;
+
+-- Browsable/exportable straight from the Supabase Table Editor (Export CSV button) —
+-- no local script needed. Project-specific: the storage URL prefix is this project's.
+CREATE OR REPLACE VIEW thumbnail_export AS
+SELECT
+  v.video_id,
+  v.channel_id,
+  cp.channel_title,
+  cp.tier,
+  v.title,
+  v.published_at,
+  v.thumbnail_url AS original_thumbnail_url,
+  v.thumbnail_path,
+  'https://ebesyvgtodrprbcpotyg.supabase.co/storage/v1/object/public/thumbnails/' || v.thumbnail_path AS stored_public_url
+FROM videos v
+LEFT JOIN channel_pool cp ON cp.channel_id = v.channel_id
+WHERE v.thumbnail_path IS NOT NULL
+ORDER BY v.first_seen_at DESC;
 """
 
 
