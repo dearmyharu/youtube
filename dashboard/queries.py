@@ -68,9 +68,11 @@ def get_monthly_keyword_trend_dict(conn, months: int = 6) -> dict:
     return out
 
 
-def get_recent_thumbnails(conn, limit: int = 60) -> pd.DataFrame:
-    """Videos with a mirrored thumbnail (new-discoveries only, see CLAUDE.md), newest first."""
-    rows = conn.execute("""
+def get_recent_thumbnails(conn, limit: int = 60, channel_id: str = None) -> pd.DataFrame:
+    """Videos with a mirrored thumbnail (new-discoveries only, see CLAUDE.md), newest first.
+    Pass channel_id to scope to a single channel (dashboard's 채널 상세 tab)."""
+    where_channel = "AND v.channel_id = %(cid)s" if channel_id else ""
+    rows = conn.execute(f"""
         SELECT v.video_id, v.title, v.published_at, v.thumbnail_path, cp.channel_title,
                lvs.view_count
         FROM videos v
@@ -80,9 +82,62 @@ def get_recent_thumbnails(conn, limit: int = 60) -> pd.DataFrame:
             WHERE vs.video_id = v.video_id ORDER BY collected_at DESC LIMIT 1
         ) lvs ON true
         WHERE v.thumbnail_path IS NOT NULL
+        {where_channel}
         ORDER BY v.first_seen_at DESC
-        LIMIT %s
-    """, (limit,)).fetchall()
+        LIMIT %(limit)s
+    """, {"cid": channel_id, "limit": limit}).fetchall()
+    return pd.DataFrame([dict(r) for r in rows])
+
+
+def get_channel_list(conn) -> pd.DataFrame:
+    rows = conn.execute("""
+        SELECT channel_id, channel_title
+        FROM channel_pool
+        WHERE decision = 'include'
+        ORDER BY channel_title
+    """).fetchall()
+    return pd.DataFrame([dict(r) for r in rows])
+
+
+def get_channel_summary(conn, channel_id: str) -> dict:
+    row = conn.execute("""
+        SELECT cp.channel_title, cp.tier, cp.source,
+               (SELECT subscriber_count FROM channel_stats WHERE channel_id=%(cid)s ORDER BY collected_at DESC LIMIT 1) AS subscriber_count,
+               (SELECT view_count FROM channel_stats WHERE channel_id=%(cid)s ORDER BY collected_at DESC LIMIT 1) AS total_view_count,
+               (SELECT COUNT(*) FROM videos WHERE channel_id=%(cid)s) AS videos_tracked
+        FROM channel_pool cp WHERE cp.channel_id = %(cid)s
+    """, {"cid": channel_id}).fetchone()
+    return dict(row) if row else {}
+
+
+def get_channel_monthly_trend(conn, channel_id: str) -> pd.DataFrame:
+    """This channel's own upload count / median views / shorts ratio per month (KST)."""
+    rows = conn.execute("""
+        WITH latest_stats AS (
+            SELECT DISTINCT ON (video_id) video_id, view_count
+            FROM video_stats WHERE video_id IN (SELECT video_id FROM videos WHERE channel_id = %(cid)s)
+            ORDER BY video_id, collected_at DESC
+        )
+        SELECT
+            to_char(v.published_at::timestamptz AT TIME ZONE 'Asia/Seoul', 'YYYY-MM') AS year_month,
+            COUNT(*) AS video_count,
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY ls.view_count) AS median_views,
+            AVG(CASE WHEN v.duration_sec <= 180 THEN 1.0 ELSE 0.0 END)::float8 AS shorts_ratio
+        FROM videos v
+        LEFT JOIN latest_stats ls ON ls.video_id = v.video_id
+        WHERE v.channel_id = %(cid)s
+        GROUP BY 1
+        ORDER BY 1
+    """, {"cid": channel_id}).fetchall()
+    return pd.DataFrame([dict(r) for r in rows])
+
+
+def get_channel_stats_history(conn, channel_id: str) -> pd.DataFrame:
+    """Daily subscriber/view snapshots since we started tracking this channel."""
+    rows = conn.execute("""
+        SELECT collected_at, subscriber_count, view_count
+        FROM channel_stats WHERE channel_id = %s ORDER BY collected_at
+    """, (channel_id,)).fetchall()
     return pd.DataFrame([dict(r) for r in rows])
 
 

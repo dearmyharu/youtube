@@ -101,10 +101,46 @@ def load_channel_leaderboard(limit: int) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=600)
-def load_recent_thumbnails(limit: int) -> pd.DataFrame:
+def load_recent_thumbnails(limit: int, channel_id: str = None) -> pd.DataFrame:
     conn = db.get_connection(database_url())
     try:
-        return queries.get_recent_thumbnails(conn, limit=limit)
+        return queries.get_recent_thumbnails(conn, limit=limit, channel_id=channel_id)
+    finally:
+        conn.close()
+
+
+@st.cache_data(ttl=600)
+def load_channel_list() -> pd.DataFrame:
+    conn = db.get_connection(database_url())
+    try:
+        return queries.get_channel_list(conn)
+    finally:
+        conn.close()
+
+
+@st.cache_data(ttl=600)
+def load_channel_summary(channel_id: str) -> dict:
+    conn = db.get_connection(database_url())
+    try:
+        return queries.get_channel_summary(conn, channel_id)
+    finally:
+        conn.close()
+
+
+@st.cache_data(ttl=600)
+def load_channel_monthly_trend(channel_id: str) -> pd.DataFrame:
+    conn = db.get_connection(database_url())
+    try:
+        return queries.get_channel_monthly_trend(conn, channel_id)
+    finally:
+        conn.close()
+
+
+@st.cache_data(ttl=600)
+def load_channel_stats_history(channel_id: str) -> pd.DataFrame:
+    conn = db.get_connection(database_url())
+    try:
+        return queries.get_channel_stats_history(conn, channel_id)
     finally:
         conn.close()
 
@@ -119,6 +155,37 @@ def fmt_ago(ts) -> str:
     if hours < 48:
         return f"{hours:.1f}시간 전"
     return f"{hours / 24:.1f}일 전"
+
+
+def render_tag_cloud(df: pd.DataFrame, count_col: str = "video_count", label_col: str = "keyword") -> None:
+    """Plain CSS tag cloud (font-size scales with count) instead of the `wordcloud` package —
+    that library needs a bundled CJK font file to render Korean glyphs at all; letting the
+    browser render the text natively sidesteps that entirely and adds zero dependencies."""
+    if df.empty:
+        return
+    max_c, min_c = df[count_col].max(), df[count_col].min()
+    spans = []
+    for _, r in df.iterrows():
+        frac = (r[count_col] - min_c) / (max_c - min_c) if max_c > min_c else 1.0
+        size = 14 + frac * 34
+        opacity = 0.55 + frac * 0.45
+        weight = 600 if frac > 0.6 else 500
+        spans.append(
+            f'<span style="font-size:{size:.0f}px;opacity:{opacity:.2f};color:{LONGFORM_COLOR};'
+            f'font-weight:{weight};margin:4px 12px;display:inline-block;line-height:1.4;">'
+            f'{r[label_col]}</span>'
+        )
+    st.markdown(
+        f'<div style="text-align:center;padding:16px 8px;">{"".join(spans)}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def download_csv_button(df: pd.DataFrame, label: str, file_name: str) -> None:
+    st.download_button(
+        label, df.to_csv(index=False).encode("utf-8-sig"), file_name=file_name,
+        mime="text/csv",
+    )
 
 
 # ============================================================ Layer 1: Overview
@@ -201,7 +268,9 @@ st.divider()
 # ============================================================ Layer 2: Diagnosis
 
 st.header("2. 진단")
-tab_a, tab_b, tab_channels, tab_thumbs = st.tabs(["소재 (A)", "형식 (B)", "채널 비교", "썸네일"])
+tab_a, tab_b, tab_channels, tab_detail, tab_thumbs = st.tabs(
+    ["소재 (A)", "형식 (B)", "채널 비교", "채널 상세", "썸네일"]
+)
 
 with tab_a:
     if not kw_freq:
@@ -216,12 +285,14 @@ with tab_a:
         if top_n.empty:
             st.caption("이 달은 최소 빈도(5건) 이상인 키워드가 없습니다.")
         else:
+            render_tag_cloud(top_n)
             chart = alt.Chart(top_n).mark_bar(color=LONGFORM_COLOR, cornerRadiusEnd=4).encode(
                 x=alt.X("video_count:Q", title="영상 수"),
                 y=alt.Y("keyword:N", sort="-x", title=None),
                 tooltip=["keyword", "video_count"],
             ).properties(height=28 * len(top_n), title=f"{selected_month} 상위 키워드")
             st.altair_chart(chart, use_container_width=True)
+            download_csv_button(top_n, "상위 키워드 CSV 다운로드", f"keywords_{selected_month}.csv")
 
         st.markdown("**직전 4개월 대비 상승/하락** (월 20건 이상 등장한 키워드만)")
         trend_rows = detect_trend(kw_freq, selected_month, baseline_months=4, min_frequency=20)
@@ -230,6 +301,7 @@ with tab_a:
             trend_df["baseline"] = trend_df["baseline"].round(1)
             trend_df["pct_change"] = trend_df["pct_change"].apply(lambda v: None if v is None else round(v * 100, 1))
             st.dataframe(trend_df, use_container_width=True, hide_index=True)
+            download_csv_button(trend_df, "상승/하락 표 CSV 다운로드", f"keyword_trend_{selected_month}.csv")
         else:
             st.caption("조건을 만족하는 키워드가 없습니다.")
 
@@ -322,13 +394,74 @@ with tab_channels:
         ).properties(height=28 * len(chart_df), title="중앙값 조회수 상위 채널 (n≥5)")
         st.altair_chart(bar, use_container_width=True)
 
-        st.dataframe(
-            leaderboard.rename(columns={
-                "channel_title": "채널", "tier": "우선순위", "subscriber_count": "구독자",
-                "median_views": "중앙값 조회수", "video_count": "수집 영상 수", "uploads_last_90d": "최근 90일 업로드",
-            }),
-            use_container_width=True, hide_index=True,
-        )
+        leaderboard_kr = leaderboard.rename(columns={
+            "channel_title": "채널", "tier": "우선순위", "subscriber_count": "구독자",
+            "median_views": "중앙값 조회수", "video_count": "수집 영상 수", "uploads_last_90d": "최근 90일 업로드",
+        })
+        st.dataframe(leaderboard_kr, use_container_width=True, hide_index=True)
+        download_csv_button(leaderboard_kr, "채널 비교 CSV 다운로드", "channel_leaderboard.csv")
+
+with tab_detail:
+    channel_list = load_channel_list()
+    if channel_list.empty:
+        st.info("데이터 없음")
+    else:
+        name_to_id = dict(zip(channel_list["channel_title"], channel_list["channel_id"]))
+        selected_name = st.selectbox("채널 선택", sorted(name_to_id.keys()))
+        selected_id = name_to_id[selected_name]
+
+        summary = load_channel_summary(selected_id)
+        s_cols = st.columns(4)
+        s_cols[0].metric("채널", summary.get("channel_title") or "-")
+        s_cols[1].metric("구독자", f"{summary['subscriber_count']:,}" if summary.get("subscriber_count") else "-")
+        s_cols[2].metric("수집된 영상", f"{summary.get('videos_tracked', 0):,}")
+        s_cols[3].metric("우선순위", summary.get("tier") or "-")
+
+        monthly = load_channel_monthly_trend(selected_id)
+        if monthly.empty:
+            st.info("이 채널의 월별 데이터가 아직 없습니다.")
+        else:
+            recent_monthly = monthly.tail(24)
+            c1, c2 = st.columns(2)
+            with c1:
+                upload_chart = alt.Chart(recent_monthly).mark_bar(color=LONGFORM_COLOR, cornerRadiusTopLeft=3, cornerRadiusTopRight=3).encode(
+                    x=alt.X("year_month:N", title=None),
+                    y=alt.Y("video_count:Q", title="업로드 수"),
+                    tooltip=["year_month", "video_count"],
+                ).properties(height=220, title="월별 업로드 수")
+                st.altair_chart(upload_chart, use_container_width=True)
+            with c2:
+                views_chart = alt.Chart(recent_monthly).mark_line(color=SHORTS_COLOR, point=True).encode(
+                    x=alt.X("year_month:N", title=None),
+                    y=alt.Y("median_views:Q", title="중앙값 조회수"),
+                    tooltip=["year_month", alt.Tooltip("median_views:Q", format=",.0f")],
+                ).properties(height=220, title="월별 중앙값 조회수")
+                st.altair_chart(views_chart, use_container_width=True)
+            download_csv_button(recent_monthly, "채널 월별 추이 CSV 다운로드", f"{selected_name}_monthly.csv")
+
+        history = load_channel_stats_history(selected_id)
+        if len(history) >= 2:
+            st.markdown("**구독자 추이** (수집 시작 이후 매일 스냅샷 — 아직 초기라 짧을 수 있습니다)")
+            sub_chart = alt.Chart(history).mark_line(color=LONGFORM_COLOR, point=True).encode(
+                x=alt.X("collected_at:T", title=None),
+                y=alt.Y("subscriber_count:Q", title="구독자", scale=alt.Scale(zero=False)),
+                tooltip=["collected_at", "subscriber_count"],
+            ).properties(height=200)
+            st.altair_chart(sub_chart, use_container_width=True)
+        else:
+            st.caption("구독자 추이는 며칠 더 쌓여야 의미 있는 그래프가 됩니다.")
+
+        st.markdown("**최근 발견 썸네일**")
+        channel_thumbs = load_recent_thumbnails(limit=10, channel_id=selected_id)
+        if channel_thumbs.empty:
+            st.caption("이 채널에서 새로 발견되어 저장된 썸네일이 아직 없습니다.")
+        else:
+            t_cols = st.columns(5)
+            for i, row in channel_thumbs.iterrows():
+                with t_cols[i % 5]:
+                    st.image(thumbnail_public_url(row["thumbnail_path"]), use_container_width=True)
+                    title = row["title"] or ""
+                    st.caption(title[:40] + ("…" if len(title) > 40 else ""))
 
 with tab_thumbs:
     st.caption(
